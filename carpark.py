@@ -4,6 +4,9 @@ import csv
 from datetime import datetime as DT
 import re
 import random
+import os
+import tempfile
+from pathlib import Path
 
 class ParkingSpaceNode:
     def __init__(self, space_id):
@@ -11,9 +14,9 @@ class ParkingSpaceNode:
         self.next = None
 
 class CarParkingSystem:
-    def __init__(self):
+    def __init__(self, csv_file=None):
         self.car_parking_spaces = 7
-        self.csv_file = 'parkingRecords.csv'
+        self.csv_file = Path(csv_file) if csv_file is not None else Path(__file__).with_name('parkingRecords.csv')
         self.head = None  # Linked list head for parking spaces
         self.car_parking_records = []
         self.csv_titles = ["Registration Number", "Ticket Number", "Parking ID Number", "Entry Time", "Exit Time", "Parking Fee"]
@@ -24,8 +27,10 @@ class CarParkingSystem:
         try:
             with open(self.csv_file, mode='r', newline='') as file:
                 reader = csv.reader(file)
-                next(reader)  # Skip headers
-                self.car_parking_records = [row for row in reader]
+                next(reader, None)  # Empty files have no records
+                self.car_parking_records = [row for row in reader if row]
+                if any(len(row) != len(self.csv_titles) for row in self.car_parking_records):
+                    raise ValueError("Parking CSV contains a record with an invalid column count")
         except FileNotFoundError:
             pass
 
@@ -46,9 +51,9 @@ class CarParkingSystem:
         return available_spaces
 
     def createParkingSpace(self):
-        occupied_spaces = [int(record[2]) for record in self.car_parking_records]
-        available_spaces = self.getAvailableSpaces()
-        return random.choice(list(set(available_spaces) - set(occupied_spaces)))
+        occupied_spaces = {int(record[2]) for record in self.car_parking_records if record[4] == "Parking..."}
+        available_spaces = sorted(set(self.getAvailableSpaces()) - occupied_spaces)
+        return random.choice(available_spaces) if available_spaces else None
 
     def isCarInParking(self, registration_number):
         for record in self.car_parking_records:
@@ -80,7 +85,7 @@ class CarParkingSystem:
             print(f"Parking ID Number: {ticket_generator}")
             print(f"Parking Space ID: {parking_space}")
             print(f"Entry Time: {time_format}")
-            remaining_car_spaces = self.car_parking_spaces - len(self.car_parking_records)
+            remaining_car_spaces = self.car_parking_spaces - sum(record[4] == "Parking..." for record in self.car_parking_records)
             print(f"Remaining parking slots: {remaining_car_spaces}")
             self.writeParkingRecords()
         else:
@@ -98,10 +103,21 @@ class CarParkingSystem:
         return bool(re.match(registration_pattern, registration_number))
 
     def writeParkingRecords(self):
-        with open(self.csv_file, mode='w', newline='') as file:
-            writer = csv.writer(file)
-            writer.writerow(self.csv_titles)  # Write CSV titles
-            writer.writerows(self.car_parking_records)
+        # Replace a complete file so a failed write does not truncate the old records.
+        temporary_path = None
+        try:
+            with tempfile.NamedTemporaryFile(mode='w', newline='', encoding='utf-8',
+                                             dir=self.csv_file.parent, delete=False) as file:
+                temporary_path = file.name
+                writer = csv.writer(file)
+                writer.writerow(self.csv_titles)
+                writer.writerows(self.car_parking_records)
+                file.flush()
+                os.fsync(file.fileno())
+            os.replace(temporary_path, self.csv_file)
+        finally:
+            if temporary_path and os.path.exists(temporary_path):
+                os.unlink(temporary_path)
 
     def exitCarPark(self):
         registration_number = input("Enter your Car's Registration Number: ")
@@ -132,7 +148,7 @@ class CarParkingSystem:
             print("Vehicle record not found")
 
     def calculateFee(self, duration):
-        total_parking_hours = duration.total_seconds() / 3600
+        total_parking_hours = max(0, duration.total_seconds()) / 3600
         parking_fee = total_parking_hours * 2
         return round(parking_fee, 2)
 
@@ -185,3 +201,4 @@ class CarParkingSystem:
 if __name__ == "__main__":
     parking_system = CarParkingSystem()
     parking_system.mainMenu()
+
